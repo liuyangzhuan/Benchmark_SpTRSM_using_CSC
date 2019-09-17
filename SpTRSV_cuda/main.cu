@@ -7,6 +7,99 @@
 #include "sptrsv_syncfree_serialref.h"
 #include "sptrsv_syncfree_cuda.h"
 
+
+
+void
+dreadtriple_dist(FILE *fp, int *m, int *n, int *nonz,
+	    double **nzval, int **rowind, int **colptr)
+{
+    int    j, k, jsize, nnz, nz, new_nonz;
+    double *a, *val;
+    int    *asub, *xa, *row, *col;
+    int    zero_base = 0;
+    
+    /* 	File format:
+     *    First line:  #rows    #non-zero
+     *    Triplet in the rest of lines:
+     *                 row    col    value
+     */
+    fscanf(fp, "%d%d%d", m, n, nonz);
+    new_nonz = *nonz;
+
+    *m = *n;
+    *nzval    = (double *) malloc(new_nonz* sizeof(double));
+    *rowind = (int *) malloc(new_nonz* sizeof(int));
+    *colptr   = (int *) malloc((*n+1)* sizeof(int));
+		
+	a    = *nzval;
+    asub = *rowind;
+    xa   = *colptr;
+
+    val = (double *) malloc(new_nonz * sizeof(double)); 
+    row = (int *) malloc(new_nonz * sizeof(int));
+    col = (int *) malloc(new_nonz * sizeof(int));
+
+    for (j = 0; j < *n; ++j) xa[j] = 0;
+
+    /* Read into the triplet array from a file */
+    for (nnz = 0, nz = 0; nnz < *nonz; ++nnz) {
+
+	fscanf(fp, "%d%d%lf\n", &row[nz], &col[nz], &val[nz]);
+
+	if ( nnz == 0 ) /* first nonzero */
+	    if ( row[0] == 0 || col[0] == 0 ) {
+		zero_base = 1;
+		printf("triplet file: row/col indices are zero-based.\n");
+	    } else
+		printf("triplet file: row/col indices are one-based.\n");
+
+	if ( !zero_base ) {
+	    /* Change to 0-based indexing. */
+	    --row[nz];
+	    --col[nz];
+	}
+
+	if (row[nz] < 0 || row[nz] >= *m || col[nz] < 0 || col[nz] >= *n) {
+	    fprintf(stderr, "nz " "%5d" ", (" "%5d" ", " "%5d" ") = %e out of bound, removed\n", nz, row[nz], col[nz], val[nz]);
+	    exit(-1);
+	} else {
+	    ++xa[col[nz]];	
+	    ++nz;
+	}
+    }
+
+    *nonz = nz;
+
+    /* Initialize the array of column pointers */
+    k = 0;
+    jsize = xa[0];
+    xa[0] = 0;
+    for (j = 1; j < *n; ++j) {
+	k += jsize;
+	jsize = xa[j];
+	xa[j] = k;
+    }
+    
+    /* Copy the triplets into the column oriented storage */
+    for (nz = 0; nz < *nonz; ++nz) {
+	j = col[nz];
+	k = xa[j];
+	asub[k] = row[nz];
+	a[k] = val[nz];
+	++xa[j];
+    }
+
+    /* Reset the column pointers to the beginning of each column */
+    for (j = *n; j > 0; --j)
+	xa[j] = xa[j-1];
+    xa[0] = 0;
+
+    free(val);
+    free(row);
+    free(col);
+}
+
+
 int main(int argc, char ** argv)
 {
     // report precision of floating-point
@@ -292,7 +385,83 @@ int main(int argc, char ** argv)
             printf("This matrix has incomplete diagonal, #missed dia nnz = %i\n", dia_miss); 
             return;
         }
-    }
+    }else if (strcmp(matstr, "-dat") == 0)
+    {
+        FILE *f;
+        int returnvalue;
+
+        if ((f = fopen(filename, "r")) == NULL)
+            return -1;
+
+        // returnvalue = fscanf(f, "%d", &m);
+        // returnvalue = fscanf(f, "%d", &n);
+        // returnvalue = fscanf(f, "%d", &nnzTR);
+
+        // cscColPtrTR = (int *)malloc((n+1) * sizeof(int));
+        // memset(cscColPtrTR, 0, (n+1) * sizeof(int));
+        // cscRowIdxTR = (int *)malloc(nnzTR * sizeof(int));
+        // cscValTR    = (VALUE_TYPE *)malloc(nnzTR * sizeof(VALUE_TYPE));
+
+        // // read row idx
+        // for (int i = 0; i < n+1; i++)
+        // {
+            // returnvalue = fscanf(f, "%d", &cscColPtrTR[i]);
+            // cscColPtrTR[i]--; // from 1-based to 0-based
+        // }
+
+        // // read col idx
+        // for (int i = 0; i < nnzTR; i++)
+        // {
+            // returnvalue = fscanf(f, "%d", &cscRowIdxTR[i]);
+            // cscRowIdxTR[i]--; // from 1-based to 0-based
+        // }
+
+        // // read val
+        // for (int i = 0; i < nnzTR; i++)
+        // {
+            // cscValTR[i] = rand() % 10 + 1;
+            // //returnvalue = fscanf(f, "%lg", &cscValTR[i]);
+        // }		
+		
+		
+		dreadtriple_dist(f, &m, &n, &nnzTR, &cscValTR, &cscRowIdxTR, &cscColPtrTR);
+		
+
+        if (f != stdin)
+            fclose(f);
+
+        // keep each column sort 
+        for (int i = 0; i < n; i++)
+        {
+            quick_sort_key_val_pair<int, int>(&cscRowIdxTR[cscColPtrTR[i]],
+                                              &cscRowIdxTR[cscColPtrTR[i]],
+                                              cscColPtrTR[i+1]-cscColPtrTR[i]);
+        }
+
+        if (substitution == SUBSTITUTION_FORWARD)
+            printf("Input csc unit-lower triangular L: ( %i, %i ) nnz = %i\n", m, n, nnzTR);
+        else if (substitution == SUBSTITUTION_BACKWARD)
+            printf("Input csc unit-upper triangular U: ( %i, %i ) nnz = %i\n", m, n, nnzTR);
+       
+        // check unit diagonal
+        int dia_miss = 0;
+        for (int i = 0; i < n; i++)
+        {
+            bool miss;
+            if (substitution == SUBSTITUTION_FORWARD)
+                miss = cscRowIdxTR[cscColPtrTR[i]] != i;
+            else if (substitution == SUBSTITUTION_BACKWARD)
+                cscRowIdxTR[cscColPtrTR[i+1] - 1] != i;
+
+            if (miss) dia_miss++;
+        }
+        //printf("dia miss = %i\n", dia_miss);
+        if (dia_miss != 0) 
+        {
+            printf("This matrix has incomplete diagonal, #missed dia nnz = %i\n", dia_miss); 
+            return;
+        }
+    }	
 
     // find level sets
     int nlevel = 0;

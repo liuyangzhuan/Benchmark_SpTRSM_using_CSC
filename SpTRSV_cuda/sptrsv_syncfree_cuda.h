@@ -54,16 +54,20 @@ void sptrsv_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     const VALUE_TYPE coef = (VALUE_TYPE)1 / d_cscVal[pos];
     //asm("prefetch.global.L2 [%0];"::"d"(d_cscVal[d_cscColPtr[global_x_id] + 1 + lane_id]));
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
-
+	int tmp;
+	
+	
     if (threadIdx.x < WARP_PER_BLOCK) { s_graphInDegree[threadIdx.x] = 1; s_left_sum[threadIdx.x] = 0; }
     __syncthreads();
 
     clock_t start;
     // Consumer
     do {
-        start = clock();
+        // start = clock();
+		tmp = s_graphInDegree[local_warp_id]-d_graphInDegree[global_x_id];
+		__threadfence();
     }
-    while (s_graphInDegree[local_warp_id] != d_graphInDegree[global_x_id]);
+    while (tmp != 0);
   
     //// Consumer
     //int graphInDegree;
@@ -139,11 +143,14 @@ void sptrsm_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
 
     clock_t start;
+	int tmp;
     // Consumer
     do {
-        start = clock();
+        // start = clock();
+		tmp=d_graphInDegree[global_x_id];
+		__threadfence();
     }
-    while (1 != d_graphInDegree[global_x_id]);
+    while (1 != tmp);
   
     //// Consumer
     //int graphInDegree;
